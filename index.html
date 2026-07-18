@@ -55,12 +55,40 @@ var LVLS = [
   { loops: 3, orbs: 6, loopDur: 6 },
   { loops: 3, orbs: 6, mirror: true },
   { loops: 4, orbs: 8, small: true },
-  { loops: 4, orbs: 8, fast: 1.15 },
+  { loops: 4, orbs: 8, fast: 1.1 },
   { loops: 4, orbs: 8, fog: true },
-  { loops: 5, orbs: 10, mirror: true, loopDur: 6 },
-  { loops: 5, orbs: 10, small: true, fast: 1.15 },
-  { loops: 5, orbs: 12, fog: true, mirror: true },
-  { loops: 6, orbs: 14, fast: 1.2, loopDur: 6, mirror: true }
+  { loops: 4, orbs: 10, loopDur: 6 },
+  { loops: 5, orbs: 10, mirror: true },
+  { loops: 4, orbs: 8, small: true, fast: 1.1 },
+  { loops: 4, orbs: 10, fog: true, loopDur: 6 },
+  { loops: 5, orbs: 10, mirror: true, small: true },
+  { loops: 5, orbs: 12, fast: 1.15 },
+  { loops: 5, orbs: 10, fog: true, mirror: true },
+  { loops: 5, orbs: 12, loopDur: 6, fast: 1.1 },
+  { loops: 5, orbs: 12, small: true, fog: true },
+  { loops: 6, orbs: 12, mirror: true, fast: 1.15 },
+  { loops: 6, orbs: 14, loopDur: 6, small: true },
+  { loops: 6, orbs: 14, mirror: true, fog: true },
+  { loops: 5, orbs: 12, loopDur: 5 },
+  { loops: 6, orbs: 14, fast: 1.2 },
+  { loops: 6, orbs: 14, small: true, mirror: true, fog: true },
+  { loops: 6, orbs: 16, loopDur: 6, fast: 1.15 },
+  { loops: 7, orbs: 16, mirror: true, loopDur: 6 },
+  { loops: 6, orbs: 14, fog: true, fast: 1.2 },
+  { loops: 7, orbs: 16, small: true, fast: 1.2 },
+  { loops: 7, orbs: 16, fog: true, loopDur: 5 },
+  { loops: 7, orbs: 18, mirror: true, fast: 1.2 },
+  { loops: 8, orbs: 18, mirror: true, small: true, loopDur: 6 },
+  { loops: 7, orbs: 16, fog: true, mirror: true, fast: 1.15 },
+  { loops: 8, orbs: 18, loopDur: 5, small: true },
+  { loops: 8, orbs: 18, fast: 1.25, fog: true },
+  { loops: 8, orbs: 20, mirror: true, loopDur: 5 },
+  { loops: 8, orbs: 20, small: true, fog: true, fast: 1.2 },
+  { loops: 9, orbs: 20, mirror: true, fast: 1.25 },
+  { loops: 9, orbs: 20, fog: true, loopDur: 5, mirror: true },
+  { loops: 9, orbs: 22, small: true, fast: 1.3, loopDur: 6 },
+  { loops: 10, orbs: 22, mirror: true, fog: true, fast: 1.25 },
+  { loops: 10, orbs: 24, mirror: true, fog: true, small: true, fast: 1.3, loopDur: 5 }
 ];
 
 var W = 0, H = 0, DPR = 1, S = 1;
@@ -84,6 +112,14 @@ var buttons = [];
 var skinIndex = 0, skinView = 0, musicIndex = 0;
 var controlF = 1.0;
 var sliderRect = null, sliderDrag = false;
+var seenTut = false, tutT = -1;
+var TUT = [
+  [0.5, 3.5, 'MOVE: WASD, ARROWS, OR DRAG'],
+  [3.5, 6.5, 'COLLECT THE GOLD ORBS'],
+  [6.5, 9.6, 'WHEN YOUR RING FILLS, YOUR PAST SELF SPAWNS'],
+  [9.6, 13, 'DODGE YOUR GHOST. IT REPEATS YOUR EVERY MOVE'],
+  [13, 16, 'GRAZE CLOSE FOR BONUS POINTS. GOOD LUCK.']
+];
 
 try {
   best = parseInt(localStorage.getItem('ghostloop_best') || '0', 10) || 0;
@@ -93,6 +129,7 @@ try {
   musicIndex = parseInt(localStorage.getItem('ghostloop_music') || '0', 10) || 0;
   levelMax = parseInt(localStorage.getItem('ghostloop_levelmax') || '1', 10) || 1;
   controlF = parseFloat(localStorage.getItem('ghostloop_control') || '1') || 1;
+  seenTut = localStorage.getItem('ghostloop_tut') === '1';
 } catch (e) {}
 if (!(controlF >= 0.6 && controlF <= 1.6)) controlF = 1.0;
 if (skinIndex < 0 || skinIndex >= SKINS.length || best < SKINS[skinIndex].unlock) skinIndex = 0;
@@ -375,8 +412,8 @@ function fontPx(n) { return Math.round(n * S) + 'px Courier New'; }
 function bfontPx(n) { return 'bold ' + Math.round(n * S) + 'px Courier New'; }
 
 // ---------------- skins ----------------
-function skinColors() {
-  var fx = SKINS[skinIndex].fx;
+function skinColors(idx) {
+  var fx = SKINS[idx == null ? skinIndex : idx].fx;
   if (fx === 'comet') return { fill: '#ffd750', glow: 'rgba(255,200,60,1)', trail: '255,170,60', ring: 'rgba(255,200,60,0.4)' };
   if (fx === 'prism') {
     var hue = Math.floor(elapsed * 80) % 360;
@@ -414,6 +451,7 @@ function startGame(m, lvlIdx) {
   nextPowerupAt = elapsed + CFG.powerupMinGap + (mode === 'level' ? 4 : 0);
   newBest = false; newUnlock = null; deathInfo = null; dyingT = 0;
   skinView = skinIndex;
+  tutT = (mode === 'classic' && !seenTut) ? 0 : -1;
   for (var i = 0; i < CFG.orbCount; i++) spawnOrb();
   sfx.start();
 }
@@ -572,6 +610,14 @@ function update(dt) {
 
   survivalTime += dt;
   score += dt * 2 * combo;
+  if (tutT >= 0) {
+    tutT += dt;
+    if (tutT > 16) {
+      tutT = -1;
+      seenTut = true;
+      try { localStorage.setItem('ghostloop_tut', '1'); } catch (e) {}
+    }
+  }
   var ix = 0, iy = 0;
   if (keys['KeyW'] || keys['ArrowUp']) iy -= 1;
   if (keys['KeyS'] || keys['ArrowDown']) iy += 1;
@@ -580,14 +626,17 @@ function update(dt) {
   if (touch.active) {
     var tdx = touch.x - touch.ox, tdy = touch.y - touch.oy;
     var td = Math.hypot(tdx, tdy);
-    if (td > 8) { ix = tdx / td * Math.min(td / 56, 1); iy = tdy / td * Math.min(td / 56, 1); }
+    var dz = Math.max(3, 10 - controlF * 4);
+    var reach = Math.max(36, 64 - controlF * 14);
+    if (td > dz) { ix = tdx / td * Math.min(td / reach, 1); iy = tdy / td * Math.min(td / reach, 1); }
   }
   var il = Math.hypot(ix, iy);
   if (il > 1) { ix /= il; iy /= il; }
-  player.vx += ix * CFG.playerAccel * controlF * dt;
-  player.vy += iy * CFG.playerAccel * controlF * dt;
-  player.vx -= player.vx * CFG.friction * controlF * dt;
-  player.vy -= player.vy * CFG.friction * controlF * dt;
+  var cf2 = Math.pow(controlF, 1.5);
+  player.vx += ix * CFG.playerAccel * cf2 * dt;
+  player.vy += iy * CFG.playerAccel * cf2 * dt;
+  player.vx -= player.vx * CFG.friction * cf2 * dt;
+  player.vy -= player.vy * CFG.friction * cf2 * dt;
   var sp = Math.hypot(player.vx, player.vy);
   if (sp > CFG.playerSpeed) { player.vx *= CFG.playerSpeed / sp; player.vy *= CFG.playerSpeed / sp; }
   player.x += player.vx * dt;
@@ -867,9 +916,9 @@ function drawTextButton(b, accent, sub) {
   ctx.restore();
   ctx.textBaseline = 'alphabetic';
 }
-function drawPlayerBall(x, y, r, pa) {
-  var sc = skinColors();
-  var fx = SKINS[skinIndex].fx;
+function drawPlayerBall(x, y, r, pa, idx) {
+  var sc = skinColors(idx);
+  var fx = SKINS[idx == null ? skinIndex : idx].fx;
   ctx.save();
   ctx.globalAlpha = pa;
   ctx.shadowBlur = 25; ctx.shadowColor = sc.glow;
@@ -1167,6 +1216,31 @@ function drawHUD() {
     ctx.fillStyle = remaining < 3 ? 'rgba(255,80,120,' + (0.6 + 0.4 * Math.sin(elapsed * 10)) + ')' : 'rgba(255,255,255,0.45)';
     ctx.fillText('NEXT IN ' + remaining.toFixed(1) + 's', rx, ty + 38);
   }
+  if (tutT >= 0 && state === 'playing' && !paused) {
+    for (var tti = 0; tti < TUT.length; tti++) {
+      var tt = TUT[tti];
+      if (tutT >= tt[0] && tutT < tt[1]) {
+        var fadeIn2 = Math.min((tutT - tt[0]) / 0.3, 1);
+        var fadeOut2 = Math.min((tt[1] - tutT) / 0.3, 1);
+        var ta2 = Math.min(fadeIn2, fadeOut2);
+        ctx.save();
+        ctx.globalAlpha = ta2;
+        ctx.font = bfontPx(14);
+        ctx.textAlign = 'center';
+        var tw2 = ctx.measureText(tt[2]).width + 44;
+        var tx2 = W / 2, ty2 = H * 0.76;
+        ctx.fillStyle = 'rgba(7,7,14,0.75)';
+        ctx.strokeStyle = 'rgba(80,230,255,0.4)';
+        ctx.lineWidth = 1.5;
+        rrect(tx2 - tw2 / 2, ty2 - 22, tw2, 40, 12);
+        ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.fillText(tt[2], tx2, ty2 + 4);
+        ctx.restore();
+        break;
+      }
+    }
+  }
 }
 function drawBoot() {
   var fadeIn = Math.min(bootT / 1.1, 1);
@@ -1283,14 +1357,19 @@ function drawMenu() {
   ctx.restore();
   ctx.textBaseline = 'alphabetic';
   yy += 46;
-  var savedSkin = skinIndex;
-  if (!locked) skinIndex = skinView;
-  drawPlayerBall(cx, yy, 13, locked ? 0.25 : 1);
-  skinIndex = savedSkin;
-  if (locked) {
-    ctx.font = bfontPx(14);
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('?', cx, yy + 5);
+  for (var sk = 0; sk < SKINS.length; sk++) {
+    var skx = cx + (sk - (SKINS.length - 1) / 2) * 52;
+    var skLocked = best < SKINS[sk].unlock;
+    drawPlayerBall(skx, yy, 11, skLocked ? 0.32 : (sk === skinView ? 1 : 0.7), sk);
+    if (sk === skinView) {
+      ctx.strokeStyle = skLocked ? 'rgba(255,120,150,0.8)' : 'rgba(80,230,255,0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(skx, yy, 18, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (sk === skinIndex && sk !== skinView) {
+      ctx.fillStyle = 'rgba(140,255,180,0.8)';
+      ctx.beginPath(); ctx.arc(skx, yy + 22, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
   }
   yy += 34 * S;
   ctx.font = bfontPx(14);
@@ -1309,36 +1388,44 @@ function drawLevels() {
   ctx.font = fontPx(12);
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
   ctx.fillText('survive the loops, collect the orbs', cx, SAFE.top + 84 * S);
-  var cols = 4, rows = 3;
-  var cell = Math.min((W - 80) / cols, 92 * S);
-  var gw = cell * cols + 14 * (cols - 1);
+  var cols = 5, rows = Math.ceil(LVLS.length / cols);
+  var gap = 10;
+  var gy0 = SAFE.top + 104 * S;
+  var availW = W - SAFE.left - SAFE.right - 50;
+  var availH = H - gy0 - SAFE.bottom - 24;
+  var cell = Math.min((availW - gap * (cols - 1)) / cols, (availH - gap * (rows - 1)) / rows, 84 * S);
+  cell = Math.max(cell, 40);
+  var gw = cell * cols + gap * (cols - 1);
   var gx0 = cx - gw / 2;
-  var gy0 = SAFE.top + 112 * S;
+  var showTags = cell >= 62;
   for (var i = 0; i < LVLS.length; i++) {
     var r = Math.floor(i / cols), c = i % cols;
-    var x = gx0 + c * (cell + 14), y = gy0 + r * (cell + 14);
+    var x = gx0 + c * (cell + gap), y = gy0 + r * (cell + gap);
     var unlocked = i < levelMax;
+    var beaten = i < levelMax - 1;
     var b = { x: x, y: y, w: cell, h: cell, idx: i };
     ctx.save();
-    ctx.fillStyle = unlocked ? 'rgba(140,255,180,0.1)' : 'rgba(255,255,255,0.04)';
-    ctx.strokeStyle = unlocked ? 'rgba(140,255,180,0.7)' : 'rgba(255,255,255,0.15)';
+    ctx.fillStyle = beaten ? 'rgba(140,255,180,0.16)' : (unlocked ? 'rgba(80,230,255,0.12)' : 'rgba(255,255,255,0.04)');
+    ctx.strokeStyle = beaten ? 'rgba(140,255,180,0.7)' : (unlocked ? 'rgba(80,230,255,0.7)' : 'rgba(255,255,255,0.13)');
     ctx.lineWidth = 2;
-    rrect(x, y, cell, cell, 14);
+    rrect(x, y, cell, cell, 10);
     ctx.fill(); ctx.stroke();
     ctx.textAlign = 'center';
-    ctx.font = bfontPx(22);
-    ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.25)';
-    ctx.fillText(String(i + 1), x + cell / 2, y + cell / 2 + 2);
-    var lv = LVLS[i];
-    var tags = [];
-    if (lv.mirror) tags.push('MIRROR');
-    if (lv.fog) tags.push('FOG');
-    if (lv.small) tags.push('SMALL');
-    if (lv.fast) tags.push('FAST');
-    if (lv.loopDur) tags.push('6s');
-    ctx.font = fontPx(9);
-    ctx.fillStyle = unlocked ? 'rgba(140,255,180,0.7)' : 'rgba(255,255,255,0.18)';
-    ctx.fillText(unlocked ? (tags.join(' ') || 'INTRO') : 'LOCKED', x + cell / 2, y + cell - 10);
+    ctx.font = bfontPx(cell >= 62 ? 20 : 15);
+    ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.22)';
+    ctx.fillText(String(i + 1), x + cell / 2, y + cell / 2 + (showTags ? -2 : 5));
+    if (showTags) {
+      var lv = LVLS[i];
+      var tags = [];
+      if (lv.mirror) tags.push('MIR');
+      if (lv.fog) tags.push('FOG');
+      if (lv.small) tags.push('SML');
+      if (lv.fast) tags.push('FST');
+      if (lv.loopDur) tags.push(lv.loopDur + 's');
+      ctx.font = fontPx(8);
+      ctx.fillStyle = unlocked ? 'rgba(140,255,180,0.65)' : 'rgba(255,255,255,0.15)';
+      ctx.fillText(unlocked ? (tags.join(' ') || 'INTRO') : 'LOCK', x + cell / 2, y + cell - 8);
+    }
     ctx.restore();
     if (unlocked) {
       (function (idx) {
