@@ -32,14 +32,13 @@
 'use strict';
 
 // ============================================================
-//  GHOST LOOP v3 - music tracks + unlockable balls
-//  vibe: dark neon arcade tension
+//  GHOST LOOP v4 - levels mode, 5 power-ups, endless rebalance
 // ============================================================
 
 var canvas = document.getElementById('game');
 var ctx = canvas.getContext('2d');
 
-var CFG = { loopDuration: 8, playerRadius: 11, playerSpeed: 340, playerAccel: 2400, friction: 8, orbRadius: 8, orbCount: 3, ghostGrace: 1.4, collideDist: 17, comboWindow: 3.0, maxCombo: 5, nearDanger: 70, grazeDist: 42, grazeCooldown: 0.6, powerupR: 13, powerupLife: 9, powerupMinGap: 11, freezeDur: 3, phaseDur: 3, milestoneEvery: 5, milestoneBonus: 250 };
+var CFG = { loopDuration: 8, playerRadius: 11, playerSpeed: 340, playerAccel: 2400, friction: 8, orbRadius: 8, orbCount: 3, ghostGrace: 1.4, collideDist: 17, comboWindow: 3.0, maxCombo: 5, nearDanger: 70, grazeDist: 42, grazeCooldown: 0.6, powerupR: 13, powerupLife: 9, powerupMinGap: 16, freezeDur: 3, phaseDur: 3, slowDur: 3, bountyDur: 8, blastRewind: 1.5, milestoneEvery: 5, milestoneBonus: 250, ghostCap: 7 };
 
 var SKINS = [
   { name: 'NOVA', unlock: 0, fx: 'nova' },
@@ -48,24 +47,43 @@ var SKINS = [
   { name: 'ETERNAL', unlock: 20000, fx: 'eternal' }
 ];
 var MUSIC = [ { name: 'VOID DRONE' }, { name: 'PULSE' }, { name: 'PHANTOM' }, { name: 'OFF' } ];
+var PTYPES = ['freeze', 'phase', 'blast', 'slow', 'bounty'];
+var LVLS = [
+  { loops: 2, orbs: 4 },
+  { loops: 3, orbs: 6 },
+  { loops: 3, orbs: 8 },
+  { loops: 3, orbs: 6, loopDur: 6 },
+  { loops: 3, orbs: 6, mirror: true },
+  { loops: 4, orbs: 8, small: true },
+  { loops: 4, orbs: 8, fast: 1.15 },
+  { loops: 4, orbs: 8, fog: true },
+  { loops: 5, orbs: 10, mirror: true, loopDur: 6 },
+  { loops: 5, orbs: 10, small: true, fast: 1.15 },
+  { loops: 5, orbs: 12, fog: true, mirror: true },
+  { loops: 6, orbs: 14, fast: 1.2, loopDur: 6, mirror: true }
+];
 
 var W = 0, H = 0, DPR = 1, S = 1;
 var SAFE = { top: 0, left: 0, right: 0, bottom: 0 };
+var AR = { x0: 0, y0: 0, x1: 0, y1: 0 };
 var state = 'boot';
 var bootT = 0;
 var paused = false;
+var mode = 'classic', levelIndex = 0, levelResult = null;
 var player, ghosts, orbs, particles, floaters, powerups, stars;
-var recording, loopTimer, loopCount, ghostClock;
+var recording, loopTimer, loopCount, ghostClock, loopDur;
 var score, combo, comboTimer, orbsCollected, survivalTime, grazes;
 var shake, flashAlpha, dangerLevel, gridPulse;
-var freezeUntil, phaseUntil, nextPowerupAt;
-var best = 0, bestLoops = 0, newBest = false, newUnlock = null;
+var freezeUntil, phaseUntil, slowUntil, bountyUntil, nextPowerupAt;
+var best = 0, bestLoops = 0, newBest = false, newUnlock = null, levelMax = 1;
 var lastTime = 0, elapsed = 0, dyingT = 0, deadAt = 0;
 var deathInfo = null;
 var muted = false;
 var lastHeartbeat = 0, lastFlame = 0;
 var buttons = [];
 var skinIndex = 0, skinView = 0, musicIndex = 0;
+var controlF = 1.0;
+var sliderRect = null, sliderDrag = false;
 
 try {
   best = parseInt(localStorage.getItem('ghostloop_best') || '0', 10) || 0;
@@ -73,15 +91,19 @@ try {
   muted = localStorage.getItem('ghostloop_muted') === '1';
   skinIndex = parseInt(localStorage.getItem('ghostloop_skin') || '0', 10) || 0;
   musicIndex = parseInt(localStorage.getItem('ghostloop_music') || '0', 10) || 0;
+  levelMax = parseInt(localStorage.getItem('ghostloop_levelmax') || '1', 10) || 1;
+  controlF = parseFloat(localStorage.getItem('ghostloop_control') || '1') || 1;
 } catch (e) {}
+if (!(controlF >= 0.6 && controlF <= 1.6)) controlF = 1.0;
 if (skinIndex < 0 || skinIndex >= SKINS.length || best < SKINS[skinIndex].unlock) skinIndex = 0;
 if (musicIndex < 0 || musicIndex >= MUSIC.length) musicIndex = 0;
+if (levelMax < 1) levelMax = 1;
+if (levelMax > LVLS.length) levelMax = LVLS.length;
 skinView = skinIndex;
 
 // ---------------- audio ----------------
 var AC = null, master = null, droneGain = null, droneOscs = [], hatBuf = null;
 var mStep = 0, mNext = 0;
-
 function initAudio() {
   if (!AC) {
     try {
@@ -107,13 +129,11 @@ function initAudio() {
   }
   if (AC && AC.state === 'suspended') AC.resume();
 }
-
 function setMuted(m) {
   muted = m;
   try { localStorage.setItem('ghostloop_muted', m ? '1' : '0'); } catch (e) {}
   if (master) master.gain.value = m ? 0 : 1;
 }
-
 function beepAt(freq, dur, type, vol, when, slide) {
   if (!AC) return;
   try {
@@ -158,7 +178,6 @@ function noiseBurst(dur, vol) {
     src.start();
   } catch (e) {}
 }
-
 var PENTA = [0, 3, 5, 7, 10];
 var sfx = {
   collect: function (c) {
@@ -167,10 +186,14 @@ var sfx = {
     beep(440 * Math.pow(2, st / 12) * 2, 0.1, 'triangle', 0.05);
   },
   graze: function () { beep(1320, 0.06, 'triangle', 0.06); },
-  powerup: function () { beep(660, 0.1, 'sine', 0.11); beep(990, 0.16, 'sine', 0.11, 0, 0.09); },
-  freeze: function () { beep(1200, 0.45, 'triangle', 0.1, 320); },
-  phase: function () { beep(300, 0.4, 'sawtooth', 0.06, 900); },
+  powerup: function () { beep(660, 0.1, 'sine', 0.09); beep(990, 0.14, 'sine', 0.09, 0, 0.09); },
+  freeze: function () { beep(1200, 0.4, 'triangle', 0.08, 320); },
+  phase: function () { beep(300, 0.35, 'sawtooth', 0.05, 900); },
+  blast: function () { noiseBurst(0.25, 0.07); beep(90, 0.35, 'sine', 0.12, 40); },
+  slow: function () { beep(500, 0.5, 'triangle', 0.07, 200); },
+  bounty: function () { beep(523, 0.12, 'sine', 0.08); beep(659, 0.18, 'sine', 0.08, 0, 0.1); },
   ghostSpawn: function () { beep(140, 0.5, 'sawtooth', 0.1, 70); beep(60, 0.3, 'sine', 0.14); },
+  ghostFade: function () { beep(400, 0.4, 'triangle', 0.05, 100); },
   milestone: function () {
     var notes = [220, 261.6, 329.6, 392];
     for (var i = 0; i < notes.length; i++) beep(notes[i], 0.35, 'triangle', 0.09, 0, i * 0.07);
@@ -178,6 +201,10 @@ var sfx = {
   unlock: function () {
     var notes = [261.6, 329.6, 392, 523.3, 659.3];
     for (var i = 0; i < notes.length; i++) beep(notes[i], 0.4, 'triangle', 0.1, 0, i * 0.09);
+  },
+  clear: function () {
+    var notes = [329.6, 392, 493.9, 659.3, 784];
+    for (var i = 0; i < notes.length; i++) beep(notes[i], 0.35, 'triangle', 0.1, 0, i * 0.08);
   },
   death: function () { noiseBurst(0.5, 0.12); beep(220, 0.9, 'sawtooth', 0.16, 30); beep(110, 1.1, 'square', 0.08, 25); },
   tick: function () { beep(880, 0.05, 'square', 0.045); },
@@ -189,17 +216,15 @@ var sfx = {
 };
 function buzz(ms) { if (navigator.vibrate) try { navigator.vibrate(ms); } catch (e) {} }
 
-// ---------------- music engine ----------------
+// ---------------- music ----------------
 var PULSE_BASS = [55, 0, 55, 0, 65.41, 0, 55, 0, 49, 0, 55, 0, 82.41, 0, 49, 0];
 var PHANTOM_ARP = [220, 261.6, 329.6, 220, 293.7, 349.2, 220, 261.6, 329.6, 174.6, 220, 261.6];
-
 function musicActive() {
   if (MUSIC[musicIndex].name === 'OFF') return false;
-  if (state === 'menu') return true;
+  if (state === 'menu' || state === 'levels') return true;
   if (state === 'playing' && !paused) return true;
   return false;
 }
-
 function musicTick() {
   if (!AC || muted) return;
   if (!musicActive() || musicIndex === 0) { mNext = AC.currentTime; mStep = 0; return; }
@@ -225,7 +250,6 @@ function musicTick() {
     mStep++;
   }
 }
-
 function cycleMusic() {
   initAudio();
   musicIndex = (musicIndex + 1) % MUSIC.length;
@@ -234,7 +258,6 @@ function cycleMusic() {
   if (AC) mNext = AC.currentTime;
   sfx.uiTick();
 }
-
 function cycleSkin() {
   initAudio();
   skinView = (skinView + 1) % SKINS.length;
@@ -253,16 +276,27 @@ addEventListener('keydown', function (e) {
   if (e.code === 'Space' || e.code === 'Enter') { handleAction(); e.preventDefault(); }
   if (e.code === 'KeyM') toggleMute();
   if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
-  if (e.code === 'KeyR' && state === 'dead') startGame();
+  if (e.code === 'KeyR' && state === 'dead') retryCurrent();
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.code) !== -1) e.preventDefault();
 });
 addEventListener('keyup', function (e) { keys[e.code] = false; });
+function setControlFromX(px) {
+  if (!sliderRect) return;
+  var v = 0.6 + (px - sliderRect.x) / sliderRect.w;
+  controlF = Math.max(0.6, Math.min(1.6, v));
+  try { localStorage.setItem('ghostloop_control', String(controlF)); } catch (e) {}
+}
 canvas.addEventListener('pointerdown', function (e) {
   initAudio();
   var px = e.clientX, py = e.clientY;
   for (var i = 0; i < buttons.length; i++) {
     var b = buttons[i];
     if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) { b.fn(); return; }
+  }
+  if (state === 'menu' && sliderRect && px >= sliderRect.x - 14 && px <= sliderRect.x + sliderRect.w + 14 && py >= sliderRect.y - 18 && py <= sliderRect.y + sliderRect.h + 18) {
+    sliderDrag = true;
+    setControlFromX(px);
+    return;
   }
   if (state !== 'playing' || paused) { handleAction(); return; }
   touch.active = true;
@@ -271,9 +305,10 @@ canvas.addEventListener('pointerdown', function (e) {
   touch.oy = touch.y = py;
 });
 canvas.addEventListener('pointermove', function (e) {
+  if (sliderDrag) { setControlFromX(e.clientX); return; }
   if (touch.active && e.pointerId === touch.id) { touch.x = e.clientX; touch.y = e.clientY; }
 });
-addEventListener('pointerup', function (e) { if (e.pointerId === touch.id) touch.active = false; });
+addEventListener('pointerup', function (e) { sliderDrag = false; if (e.pointerId === touch.id) touch.active = false; });
 addEventListener('pointercancel', function () { touch.active = false; });
 canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 addEventListener('visibilitychange', function () {
@@ -283,8 +318,11 @@ function handleAction() {
   initAudio();
   if (state === 'boot') { if (bootT > 0.8) { state = 'menu'; } return; }
   if (paused) { togglePause(); return; }
-  if (state === 'menu') startGame();
-  else if (state === 'dead' && elapsed - deadAt > 0.6) startGame();
+  if (state === 'menu') startGame('classic', 0);
+}
+function retryCurrent() {
+  if (mode === 'level' && levelResult === 'clear' && levelIndex + 1 < LVLS.length) startGame('level', levelIndex + 1);
+  else startGame(mode, levelIndex);
 }
 function toggleMute() { initAudio(); setMuted(!muted); }
 function togglePause() {
@@ -292,6 +330,8 @@ function togglePause() {
   paused = !paused;
   if (paused) sfx.pause(); else { sfx.resume(); if (AC) mNext = AC.currentTime; }
 }
+function goMenu() { state = 'menu'; sfx.uiTick(); }
+function goLevels() { state = 'levels'; sfx.uiTick(); }
 
 // ---------------- layout ----------------
 function readSafeArea() {
@@ -304,6 +344,15 @@ function readSafeArea() {
     SAFE.right = Math.max(0, W - (p2.left + 10));
   } catch (e) { SAFE = { top: 0, left: 0, right: 0, bottom: 0 }; }
 }
+function setArena() {
+  var lvl = (mode === 'level') ? LVLS[levelIndex] : null;
+  if (lvl && lvl.small) {
+    AR.x0 = W * 0.14; AR.x1 = W * 0.86;
+    AR.y0 = H * 0.16; AR.y1 = H * 0.86;
+  } else {
+    AR.x0 = 0; AR.y0 = 0; AR.x1 = W; AR.y1 = H;
+  }
+}
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth; H = window.innerHeight;
@@ -312,6 +361,7 @@ function resize() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   S = Math.max(0.8, Math.min(1.5, Math.min(W, H) / 480));
   readSafeArea();
+  setArena();
   stars = [];
   var n = Math.floor(W * H / 26000);
   for (var i = 0; i < n; i++) {
@@ -324,7 +374,7 @@ resize();
 function fontPx(n) { return Math.round(n * S) + 'px Courier New'; }
 function bfontPx(n) { return 'bold ' + Math.round(n * S) + 'px Courier New'; }
 
-// ---------------- skin visuals ----------------
+// ---------------- skins ----------------
 function skinColors() {
   var fx = SKINS[skinIndex].fx;
   if (fx === 'comet') return { fill: '#ffd750', glow: 'rgba(255,200,60,1)', trail: '255,170,60', ring: 'rgba(255,200,60,0.4)' };
@@ -345,32 +395,48 @@ function trailStyle(life) {
 }
 
 // ---------------- game setup ----------------
-function startGame() {
+function startGame(m, lvlIdx) {
+  mode = m;
+  levelIndex = lvlIdx || 0;
+  levelResult = null;
+  var lvl = (mode === 'level') ? LVLS[levelIndex] : null;
+  loopDur = (lvl && lvl.loopDur) ? lvl.loopDur : CFG.loopDuration;
   state = 'playing';
   paused = false;
-  player = { x: W / 2, y: H / 2, vx: 0, vy: 0, trail: [] };
+  setArena();
+  player = { x: (AR.x0 + AR.x1) / 2, y: (AR.y0 + AR.y1) / 2, vx: 0, vy: 0, trail: [] };
   ghosts = []; orbs = []; particles = []; floaters = []; powerups = [];
   recording = []; loopTimer = 0; loopCount = 0; ghostClock = 0;
   score = 0; combo = 1; comboTimer = 0;
   orbsCollected = 0; survivalTime = 0; grazes = 0;
   shake = 0; flashAlpha = 0; dangerLevel = 0; gridPulse = 0;
-  freezeUntil = 0; phaseUntil = 0;
-  nextPowerupAt = elapsed + CFG.powerupMinGap;
+  freezeUntil = 0; phaseUntil = 0; slowUntil = 0; bountyUntil = 0;
+  nextPowerupAt = elapsed + CFG.powerupMinGap + (mode === 'level' ? 4 : 0);
   newBest = false; newUnlock = null; deathInfo = null; dyingT = 0;
   skinView = skinIndex;
   for (var i = 0; i < CFG.orbCount; i++) spawnOrb();
   sfx.start();
 }
-function safeSpot(minPlayerDist) {
+function safeSpot(minPlayerDist, nearGhostBias) {
   var x, y, ok, tries = 0;
   do {
     ok = true;
-    x = 50 + Math.random() * (W - 100);
-    y = 70 + Math.random() * (H - 140);
-    if (player && Math.hypot(x - player.x, y - player.y) < minPlayerDist) ok = false;
+    if (nearGhostBias && ghosts && ghosts.length > 0 && Math.random() < nearGhostBias) {
+      var g = ghosts[Math.floor(Math.random() * ghosts.length)];
+      var pt = g.path[Math.floor(Math.random() * g.path.length)];
+      var an = Math.random() * Math.PI * 2;
+      var rr = 60 + Math.random() * 50;
+      x = pt.x + Math.cos(an) * rr;
+      y = pt.y + Math.sin(an) * rr;
+    } else {
+      x = AR.x0 + 50 + Math.random() * (AR.x1 - AR.x0 - 100);
+      y = AR.y0 + 70 + Math.random() * (AR.y1 - AR.y0 - 140);
+    }
+    if (x < AR.x0 + 30 || x > AR.x1 - 30 || y < AR.y0 + 30 || y > AR.y1 - 30) ok = false;
+    if (ok && player && Math.hypot(x - player.x, y - player.y) < minPlayerDist) ok = false;
     if (ok && ghosts) {
       for (var i = 0; i < ghosts.length; i++) {
-        if (Math.hypot(x - ghosts[i].x, y - ghosts[i].y) < 90) { ok = false; break; }
+        if (Math.hypot(x - ghosts[i].x, y - ghosts[i].y) < 80) { ok = false; break; }
       }
     }
     tries++;
@@ -378,12 +444,13 @@ function safeSpot(minPlayerDist) {
   return { x: x, y: y };
 }
 function spawnOrb() {
-  var p = safeSpot(140);
+  var bias = (mode === 'classic') ? Math.min(0.5, loopCount * 0.03) : 0;
+  var p = safeSpot(140, bias);
   orbs.push({ x: p.x, y: p.y, phase: Math.random() * Math.PI * 2 });
 }
 function spawnPowerup() {
-  var p = safeSpot(160);
-  var type = Math.random() < 0.5 ? 'freeze' : 'phase';
+  var p = safeSpot(160, 0);
+  var type = PTYPES[Math.floor(Math.random() * PTYPES.length)];
   powerups.push({ x: p.x, y: p.y, type: type, born: elapsed, rot: 0 });
 }
 function burst(x, y, color, n, speed) {
@@ -397,6 +464,8 @@ function burst(x, y, color, n, speed) {
 function floatText(x, y, text, color, big) {
   floaters.push({ x: x, y: y, text: text, color: color, life: 1, big: !!big });
 }
+
+// ---------------- ghost replay ----------------
 function ghostPos(g, t) {
   var path = g.path;
   var T = t % g.duration;
@@ -416,6 +485,40 @@ function ghostPos(g, t) {
   var f = (T - a.t) / ((b.t - a.t) || 0.0001);
   return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
 }
+function ghostSpeedMult() {
+  var m = 1;
+  if (mode === 'classic') m *= 1 + Math.min(0.3, Math.floor(loopCount / CFG.milestoneEvery) * 0.03);
+  if (mode === 'level' && LVLS[levelIndex].fast) m *= LVLS[levelIndex].fast;
+  if (elapsed < slowUntil) m *= 0.6;
+  return m;
+}
+function advanceGhosts(sdt) {
+  var frozen = elapsed < freezeUntil;
+  if (!frozen) ghostClock += sdt * ghostSpeedMult();
+  for (var gi = 0; gi < ghosts.length; gi++) {
+    var g = ghosts[gi];
+    var age = ghostClock - g.born;
+    var gp = ghostPos(g, age);
+    g.x = gp.x; g.y = gp.y;
+    g.age = age;
+  }
+}
+function pushGhost(path) {
+  ghosts.push({ path: path, duration: loopDur, born: ghostClock, hue: (loopCount * 47) % 360, lastGraze: -9, x: player.x, y: player.y, age: 0, mirror: false });
+  if (mode === 'level' && LVLS[levelIndex].mirror) {
+    var mp = [];
+    for (var i = 0; i < path.length; i++) mp.push({ t: path[i].t, x: W - path[i].x, y: path[i].y });
+    ghosts.push({ path: mp, duration: loopDur, born: ghostClock, hue: 140, lastGraze: -9, x: W - player.x, y: player.y, age: 0, mirror: true });
+  }
+  if (mode === 'classic' && ghosts.length > CFG.ghostCap) {
+    var old = ghosts.shift();
+    sfx.ghostFade();
+    burst(old.x, old.y, [200, 200, 230], 16, 120);
+    floatText(old.x, old.y - 20, 'GHOST FADED', 'rgba(200,200,230,1)');
+  }
+}
+
+// ---------------- effects ----------------
 function updateEffects(dt) {
   for (var i = particles.length - 1; i >= 0; i--) {
     var p = particles[i];
@@ -445,17 +548,8 @@ function updateDrone() {
     droneOscs[1].frequency.value = 55.7 + Math.min(ghosts.length, 10) * 0.35;
   }
 }
-function advanceGhosts(sdt) {
-  var frozen = elapsed < freezeUntil;
-  if (!frozen) ghostClock += sdt;
-  for (var gi = 0; gi < ghosts.length; gi++) {
-    var g = ghosts[gi];
-    var age = ghostClock - g.born;
-    var gp = ghostPos(g, age);
-    g.x = gp.x; g.y = gp.y;
-    g.age = age;
-  }
-}
+
+// ---------------- update ----------------
 function update(dt) {
   elapsed += dt;
   updateDrone();
@@ -465,7 +559,7 @@ function update(dt) {
     if (bootT >= 2.6) state = 'menu';
     return;
   }
-  if (state === 'menu') return;
+  if (state === 'menu' || state === 'levels') return;
   if (paused) return;
   if (state === 'dying') {
     advanceGhosts(dt * 0.22);
@@ -475,6 +569,7 @@ function update(dt) {
     return;
   }
   if (state === 'dead') { updateEffects(dt); return; }
+
   survivalTime += dt;
   score += dt * 2 * combo;
   var ix = 0, iy = 0;
@@ -489,21 +584,19 @@ function update(dt) {
   }
   var il = Math.hypot(ix, iy);
   if (il > 1) { ix /= il; iy /= il; }
-  player.vx += ix * CFG.playerAccel * dt;
-  player.vy += iy * CFG.playerAccel * dt;
-  player.vx -= player.vx * CFG.friction * dt;
-  player.vy -= player.vy * CFG.friction * dt;
+  player.vx += ix * CFG.playerAccel * controlF * dt;
+  player.vy += iy * CFG.playerAccel * controlF * dt;
+  player.vx -= player.vx * CFG.friction * controlF * dt;
+  player.vy -= player.vy * CFG.friction * controlF * dt;
   var sp = Math.hypot(player.vx, player.vy);
   if (sp > CFG.playerSpeed) { player.vx *= CFG.playerSpeed / sp; player.vy *= CFG.playerSpeed / sp; }
   player.x += player.vx * dt;
   player.y += player.vy * dt;
-  player.x = Math.max(CFG.playerRadius, Math.min(W - CFG.playerRadius, player.x));
-  player.y = Math.max(CFG.playerRadius, Math.min(H - CFG.playerRadius, player.y));
+  player.x = Math.max(AR.x0 + CFG.playerRadius, Math.min(AR.x1 - CFG.playerRadius, player.x));
+  player.y = Math.max(AR.y0 + CFG.playerRadius, Math.min(AR.y1 - CFG.playerRadius, player.y));
   player.trail.push({ x: player.x, y: player.y, life: 1 });
   if (player.trail.length > 24) player.trail.shift();
   for (var ti = 0; ti < player.trail.length; ti++) player.trail[ti].life -= dt * 2.2;
-
-  // comet flame
   if (SKINS[skinIndex].fx === 'comet' && sp > 90 && elapsed - lastFlame > 0.03 && particles.length < 200) {
     lastFlame = elapsed;
     particles.push({ x: player.x - player.vx * 0.03, y: player.y - player.vy * 0.03, vx: -player.vx * 0.15 + (Math.random() - 0.5) * 30, vy: -player.vy * 0.15 + (Math.random() - 0.5) * 30, life: 0.7, decay: 2.2, size: 2 + Math.random() * 2.5, color: [255, 150 + Math.floor(Math.random() * 70), 40] });
@@ -511,14 +604,14 @@ function update(dt) {
 
   loopTimer += dt;
   recording.push({ t: loopTimer, x: player.x, y: player.y });
-  var remaining = CFG.loopDuration - loopTimer;
+  var remaining = loopDur - loopTimer;
   if (remaining <= 3 && remaining > 0) {
     var prevRem = remaining + dt;
     if (Math.ceil(remaining) !== Math.ceil(prevRem)) sfx.tick();
   }
-  if (loopTimer >= CFG.loopDuration) {
+  if (loopTimer >= loopDur) {
     loopCount++;
-    ghosts.push({ path: recording, duration: CFG.loopDuration, born: ghostClock, hue: (loopCount * 47) % 360, lastGraze: -9, x: player.x, y: player.y, age: 0 });
+    pushGhost(recording);
     recording = [{ t: 0, x: player.x, y: player.y }];
     loopTimer = 0;
     sfx.ghostSpawn();
@@ -527,12 +620,14 @@ function update(dt) {
     shake = Math.min(shake + 6, 10);
     floatText(player.x, player.y - 40, 'LOOP ' + loopCount, 'rgba(255,80,120,1)');
     burst(player.x, player.y, [255, 80, 120], 18, 160);
-    if (loopCount % CFG.milestoneEvery === 0) {
+    if (mode === 'classic' && loopCount % CFG.milestoneEvery === 0) {
       score += CFG.milestoneBonus;
       sfx.milestone();
       floatText(W / 2, H * 0.3, loopCount + ' LOOPS  +' + CFG.milestoneBonus, 'rgba(255,215,80,1)', true);
       flashAlpha = 0.5;
     }
+    if (mode === 'level') checkLevelClear();
+    if (state !== 'playing') return;
   }
   advanceGhosts(dt);
   var phased = elapsed < phaseUntil;
@@ -566,7 +661,8 @@ function update(dt) {
     if (od < CFG.playerRadius + CFG.orbRadius + 4) {
       orbs.splice(oi, 1);
       orbsCollected++;
-      var pts = 25 * combo;
+      var mult2 = (elapsed < bountyUntil) ? 2 : 1;
+      var pts = 25 * combo * mult2;
       score += pts;
       sfx.collect(combo);
       buzz(12);
@@ -575,11 +671,12 @@ function update(dt) {
       combo = Math.min(CFG.maxCombo, combo + 1);
       comboTimer = CFG.comboWindow;
       spawnOrb();
+      if (mode === 'level') { checkLevelClear(); if (state !== 'playing') return; }
     }
   }
   if (elapsed >= nextPowerupAt && powerups.length === 0 && loopCount >= 1) {
     spawnPowerup();
-    nextPowerupAt = elapsed + CFG.powerupMinGap + Math.random() * 7;
+    nextPowerupAt = elapsed + CFG.powerupMinGap + Math.random() * 8;
   }
   for (var pi = powerups.length - 1; pi >= 0; pi--) {
     var pu = powerups[pi];
@@ -590,47 +687,86 @@ function update(dt) {
       powerups.splice(pi, 1);
       sfx.powerup();
       buzz(20);
-      if (pu.type === 'freeze') {
-        freezeUntil = elapsed + CFG.freezeDur;
-        sfx.freeze();
-        floatText(pu.x, pu.y - 20, 'FREEZE', 'rgba(140,220,255,1)', true);
-        burst(pu.x, pu.y, [140, 220, 255], 20, 180);
-      } else {
-        phaseUntil = elapsed + CFG.phaseDur;
-        sfx.phase();
-        floatText(pu.x, pu.y - 20, 'PHASE', 'rgba(190,130,255,1)', true);
-        burst(pu.x, pu.y, [190, 130, 255], 20, 180);
-      }
+      applyPowerup(pu);
     }
   }
   updateEffects(dt);
 }
+function applyPowerup(pu) {
+  if (pu.type === 'freeze') {
+    freezeUntil = elapsed + CFG.freezeDur;
+    sfx.freeze();
+    floatText(pu.x, pu.y - 20, 'FREEZE', 'rgba(140,220,255,1)', true);
+    burst(pu.x, pu.y, [140, 220, 255], 14, 150);
+  } else if (pu.type === 'phase') {
+    phaseUntil = elapsed + CFG.phaseDur;
+    sfx.phase();
+    floatText(pu.x, pu.y - 20, 'PHASE', 'rgba(190,130,255,1)', true);
+    burst(pu.x, pu.y, [190, 130, 255], 14, 150);
+  } else if (pu.type === 'blast') {
+    sfx.blast();
+    shake = Math.min(shake + 8, 14);
+    for (var i = 0; i < ghosts.length; i++) {
+      ghosts[i].born = Math.min(ghosts[i].born + CFG.blastRewind, ghostClock);
+    }
+    floatText(pu.x, pu.y - 20, 'BLAST', 'rgba(255,150,60,1)', true);
+    burst(pu.x, pu.y, [255, 150, 60], 22, 220);
+  } else if (pu.type === 'slow') {
+    slowUntil = elapsed + CFG.slowDur;
+    sfx.slow();
+    floatText(pu.x, pu.y - 20, 'SLOW', 'rgba(120,160,255,1)', true);
+    burst(pu.x, pu.y, [120, 160, 255], 14, 150);
+  } else {
+    bountyUntil = elapsed + CFG.bountyDur;
+    sfx.bounty();
+    floatText(pu.x, pu.y - 20, 'BOUNTY x2', 'rgba(255,215,80,1)', true);
+    burst(pu.x, pu.y, [255, 215, 80], 14, 150);
+  }
+}
+function checkLevelClear() {
+  var goal = LVLS[levelIndex];
+  if (loopCount >= goal.loops && orbsCollected >= goal.orbs) {
+    state = 'dead';
+    deadAt = elapsed;
+    levelResult = 'clear';
+    sfx.clear();
+    flashAlpha = 0.6;
+    burst(player.x, player.y, [140, 255, 180], 30, 240);
+    if (levelIndex + 1 >= levelMax && levelMax < LVLS.length) {
+      levelMax = levelIndex + 2;
+      try { localStorage.setItem('ghostloop_levelmax', String(levelMax)); } catch (e) {}
+    }
+  }
+}
 function die(ghost) {
   state = 'dying';
   dyingT = 0;
-  deathInfo = { x: player.x, y: player.y, byLoop: ghosts.indexOf(ghost) + 1 };
+  levelResult = (mode === 'level') ? 'fail' : null;
+  deathInfo = { x: player.x, y: player.y, byLoop: ghosts.indexOf(ghost) + 1, mirror: ghost.mirror };
   sfx.death();
   buzz(90);
   shake = 22;
   flashAlpha = 0.8;
   burst(player.x, player.y, [80, 230, 255], 40, 320);
   burst(player.x, player.y, [255, 80, 120], 25, 220);
-  var prevBest = best;
-  var finalScore = Math.floor(score);
-  if (finalScore > best) {
-    best = finalScore;
-    newBest = true;
-    try { localStorage.setItem('ghostloop_best', String(best)); } catch (e) {}
-    for (var i = 0; i < SKINS.length; i++) {
-      if (SKINS[i].unlock > 0 && prevBest < SKINS[i].unlock && best >= SKINS[i].unlock) {
-        newUnlock = SKINS[i].name;
-        sfx.unlock();
+  if (mode === 'classic') {
+    var prevBest = best;
+    var finalScore = Math.floor(score);
+    if (finalScore > best) {
+      best = finalScore;
+      newBest = true;
+      try { localStorage.setItem('ghostloop_best', String(best)); } catch (e) {}
+      for (var i = 0; i < SKINS.length; i++) {
+        if (SKINS[i].unlock > 0 && prevBest < SKINS[i].unlock && best >= SKINS[i].unlock) {
+          newUnlock = SKINS[i].name;
+          sfx.unlock();
+        }
       }
     }
-  }
-  if (loopCount > bestLoops) {
-    bestLoops = loopCount;
-    try { localStorage.setItem('ghostloop_bestloops', String(bestLoops)); } catch (e) {}
+    if (loopCount > bestLoops) {
+      bestLoops = loopCount;
+      try { localStorage.setItem('ghostloop_bestloops', String(bestLoops)); } catch (e) {}
+    }
   }
 }
 function shareScore() {
@@ -644,7 +780,7 @@ function shareScore() {
   } catch (e) {}
 }
 
-// ---------------- draw ----------------
+// ---------------- draw helpers ----------------
 function rrect(x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -698,6 +834,12 @@ function drawIconButton(b) {
       ctx.fillRect(cx - 2.4 * u, cy - 3 * u, 1.8 * u, 6 * u);
       ctx.fillRect(cx + 0.7 * u, cy - 3 * u, 1.8 * u, 6 * u);
     }
+  } else if (b.icon === 'back') {
+    ctx.beginPath();
+    ctx.moveTo(cx + 1.5 * u, cy - 2.5 * u);
+    ctx.lineTo(cx - 1.5 * u, cy);
+    ctx.lineTo(cx + 1.5 * u, cy + 2.5 * u);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -744,12 +886,47 @@ function drawPlayerBall(x, y, r, pa) {
   } else {
     ctx.fillStyle = '#0a0a14';
   }
-  if (fx === 'eternal') {
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  }
   ctx.beginPath(); ctx.arc(x - 4, y - 2, 2.4, 0, Math.PI * 2); ctx.arc(x + 4, y - 2, 2.4, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
+function drawPowerupShape(pu) {
+  var R = CFG.powerupR;
+  ctx.beginPath();
+  if (pu.type === 'freeze') {
+    for (var hx = 0; hx < 6; hx++) {
+      var an = hx * Math.PI / 3;
+      if (hx === 0) ctx.moveTo(Math.cos(an) * R, Math.sin(an) * R);
+      else ctx.lineTo(Math.cos(an) * R, Math.sin(an) * R);
+    }
+    ctx.closePath();
+  } else if (pu.type === 'phase') {
+    ctx.moveTo(0, -R); ctx.lineTo(R, 0); ctx.lineTo(0, R); ctx.lineTo(-R, 0);
+    ctx.closePath();
+  } else if (pu.type === 'blast') {
+    for (var k = 0; k < 8; k++) {
+      var aa = k * Math.PI / 4;
+      var rr = (k % 2 === 0) ? R : R * 0.45;
+      if (k === 0) ctx.moveTo(Math.cos(aa) * rr, Math.sin(aa) * rr);
+      else ctx.lineTo(Math.cos(aa) * rr, Math.sin(aa) * rr);
+    }
+    ctx.closePath();
+  } else if (pu.type === 'slow') {
+    ctx.moveTo(-R * 0.8, -R); ctx.lineTo(R * 0.8, -R); ctx.lineTo(0, 0);
+    ctx.lineTo(R * 0.8, R); ctx.lineTo(-R * 0.8, R); ctx.lineTo(0, 0);
+    ctx.closePath();
+  } else {
+    ctx.arc(0, 0, R * 0.85, 0, Math.PI * 2);
+  }
+}
+function powerupColor(type) {
+  if (type === 'freeze') return '140,220,255';
+  if (type === 'phase') return '190,130,255';
+  if (type === 'blast') return '255,150,60';
+  if (type === 'slow') return '120,160,255';
+  return '255,215,80';
+}
+
+// ---------------- draw ----------------
 function draw() {
   buttons = [];
   ctx.clearRect(0, 0, W, H);
@@ -776,14 +953,24 @@ function draw() {
   for (var gy = gs; gy < H; gy += gs) { ctx.moveTo(0, gy); ctx.lineTo(W, gy); }
   ctx.stroke();
   if (state === 'menu') { drawMenu(); ctx.restore(); drawCorners(); return; }
+  if (state === 'levels') { drawLevels(); ctx.restore(); drawCorners(); return; }
+
+  if (AR.x0 > 0) {
+    ctx.strokeStyle = 'rgba(255,120,150,0.35)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 8]);
+    ctx.strokeRect(AR.x0, AR.y0, AR.x1 - AR.x0, AR.y1 - AR.y0);
+    ctx.setLineDash([]);
+  }
   var frozen = elapsed < freezeUntil;
   var phased = elapsed < phaseUntil;
+  var bounty = elapsed < bountyUntil;
   for (var oi = 0; oi < orbs.length; oi++) {
     var o = orbs[oi];
     var pulse = 1 + Math.sin(o.phase) * 0.18;
-    var r = CFG.orbRadius * pulse;
+    var r = CFG.orbRadius * pulse * (bounty ? 1.2 : 1);
     ctx.save();
-    ctx.shadowBlur = 18; ctx.shadowColor = 'rgba(255,215,80,0.9)';
+    ctx.shadowBlur = bounty ? 26 : 18; ctx.shadowColor = 'rgba(255,215,80,0.9)';
     ctx.fillStyle = 'rgba(255,215,80,0.95)';
     ctx.beginPath(); ctx.arc(o.x, o.y, r, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
@@ -794,26 +981,15 @@ function draw() {
     var pu = powerups[pi];
     var lifeLeft = CFG.powerupLife - (elapsed - pu.born);
     if (lifeLeft < 2 && Math.floor(elapsed * 6) % 2 === 0) continue;
-    var col = pu.type === 'freeze' ? '140,220,255' : '190,130,255';
+    var col = powerupColor(pu.type);
     ctx.save();
     ctx.translate(pu.x, pu.y);
     ctx.rotate(pu.rot);
-    ctx.shadowBlur = 20; ctx.shadowColor = 'rgba(' + col + ',0.9)';
+    ctx.shadowBlur = 16; ctx.shadowColor = 'rgba(' + col + ',0.8)';
     ctx.strokeStyle = 'rgba(' + col + ',0.95)';
-    ctx.fillStyle = 'rgba(' + col + ',0.25)';
+    ctx.fillStyle = 'rgba(' + col + ',0.22)';
     ctx.lineWidth = 2.5;
-    var R = CFG.powerupR;
-    ctx.beginPath();
-    if (pu.type === 'freeze') {
-      for (var hx = 0; hx < 6; hx++) {
-        var an = hx * Math.PI / 3;
-        if (hx === 0) ctx.moveTo(Math.cos(an) * R, Math.sin(an) * R);
-        else ctx.lineTo(Math.cos(an) * R, Math.sin(an) * R);
-      }
-    } else {
-      ctx.moveTo(0, -R); ctx.lineTo(R, 0); ctx.lineTo(0, R); ctx.lineTo(-R, 0);
-    }
-    ctx.closePath();
+    drawPowerupShape(pu);
     ctx.fill(); ctx.stroke();
     ctx.restore();
   }
@@ -822,7 +998,10 @@ function draw() {
     var grace = g.age < CFG.ghostGrace;
     var alpha = grace ? 0.25 + 0.5 * (g.age / CFG.ghostGrace) : 0.75;
     if (phased) alpha *= 0.45;
-    var col2 = frozen ? 'hsla(200, 80%, 70%,' : 'hsla(' + (340 + (g.hue % 40)) + ', 90%, 65%,';
+    var col2;
+    if (frozen) col2 = 'hsla(200, 80%, 70%,';
+    else if (g.mirror) col2 = 'hsla(150, 70%, 60%,';
+    else col2 = 'hsla(' + (340 + (g.hue % 40)) + ', 90%, 65%,';
     ctx.strokeStyle = col2 + '0.06)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -863,7 +1042,7 @@ function draw() {
     if (state === 'dying') pa = Math.max(0, 1 - dyingT * 1.4);
     drawPlayerBall(player.x, player.y, CFG.playerRadius, pa);
     if (state === 'playing') {
-      var frac = loopTimer / CFG.loopDuration;
+      var frac = loopTimer / loopDur;
       var urgent = frac > 0.75;
       var sc = skinColors();
       ctx.strokeStyle = phased ? 'rgba(190,130,255,0.6)' : (urgent ? 'rgba(255,80,120,' + (0.5 + 0.4 * Math.sin(elapsed * 12)) + ')' : sc.ring);
@@ -896,6 +1075,13 @@ function draw() {
     ctx.beginPath(); ctx.arc(touch.ox + Math.cos(ja) * jd, touch.oy + Math.sin(ja) * jd, 18, 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
+  if (mode === 'level' && LVLS[levelIndex].fog && (state === 'playing' || state === 'dying')) {
+    var fg = ctx.createRadialGradient(player.x, player.y, 130, player.x, player.y, 280);
+    fg.addColorStop(0, 'rgba(5,5,12,0)');
+    fg.addColorStop(1, 'rgba(5,5,12,0.94)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(0, 0, W, H);
+  }
   if (dangerLevel > 0.02 && state === 'playing' && !paused) {
     var grad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.7);
     grad.addColorStop(0, 'rgba(255,40,80,0)');
@@ -923,17 +1109,27 @@ function drawCorners() {
     var pb = { x: x - bs - 10, y: y, w: bs, h: bs, icon: 'pause', fn: togglePause };
     buttons.push(pb); drawIconButton(pb);
   }
+  if (state === 'levels') {
+    var bb = { x: SAFE.left + pad, y: y, w: bs, h: bs, icon: 'back', fn: goMenu };
+    buttons.push(bb); drawIconButton(bb);
+  }
 }
 function drawHUD() {
-  if (state === 'menu') return;
+  if (state === 'menu' || state === 'levels') return;
   var lx = SAFE.left + 16, ty = SAFE.top + 16;
   ctx.textAlign = 'left';
   ctx.font = bfontPx(22);
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   ctx.fillText(Math.floor(score).toLocaleString(), lx, ty + 20);
   ctx.font = fontPx(12);
-  ctx.fillStyle = 'rgba(255,255,255,0.45)';
-  ctx.fillText('BEST ' + best.toLocaleString(), lx, ty + 40);
+  if (mode === 'level') {
+    var goal = LVLS[levelIndex];
+    ctx.fillStyle = 'rgba(140,255,180,0.8)';
+    ctx.fillText('LVL ' + (levelIndex + 1) + ' · ' + Math.min(loopCount, goal.loops) + '/' + goal.loops + ' LOOPS · ' + Math.min(orbsCollected, goal.orbs) + '/' + goal.orbs + ' ORBS', lx, ty + 40);
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillText('BEST ' + best.toLocaleString(), lx, ty + 40);
+  }
   var by = ty + 62;
   if (combo > 1 && state === 'playing') {
     ctx.font = bfontPx(16);
@@ -943,20 +1139,21 @@ function drawHUD() {
     ctx.fillRect(lx, by + 6, 90 * S * (comboTimer / CFG.comboWindow), 4);
     by += 28;
   }
-  if (elapsed < freezeUntil) {
-    ctx.font = bfontPx(13);
-    ctx.fillStyle = 'rgba(140,220,255,0.95)';
-    ctx.fillText('FREEZE', lx, by);
-    ctx.fillStyle = 'rgba(140,220,255,0.35)';
-    ctx.fillRect(lx, by + 6, 70 * S * ((freezeUntil - elapsed) / CFG.freezeDur), 4);
-    by += 26;
-  }
-  if (elapsed < phaseUntil) {
-    ctx.font = bfontPx(13);
-    ctx.fillStyle = 'rgba(190,130,255,0.95)';
-    ctx.fillText('PHASE', lx, by);
-    ctx.fillStyle = 'rgba(190,130,255,0.35)';
-    ctx.fillRect(lx, by + 6, 70 * S * ((phaseUntil - elapsed) / CFG.phaseDur), 4);
+  var bars = [
+    ['FREEZE', freezeUntil, CFG.freezeDur, '140,220,255'],
+    ['PHASE', phaseUntil, CFG.phaseDur, '190,130,255'],
+    ['SLOW', slowUntil, CFG.slowDur, '120,160,255'],
+    ['BOUNTY', bountyUntil, CFG.bountyDur, '255,215,80']
+  ];
+  for (var bi = 0; bi < bars.length; bi++) {
+    if (elapsed < bars[bi][1]) {
+      ctx.font = bfontPx(13);
+      ctx.fillStyle = 'rgba(' + bars[bi][3] + ',0.95)';
+      ctx.fillText(bars[bi][0], lx, by);
+      ctx.fillStyle = 'rgba(' + bars[bi][3] + ',0.35)';
+      ctx.fillRect(lx, by + 6, 70 * S * ((bars[bi][1] - elapsed) / bars[bi][2]), 4);
+      by += 26;
+    }
   }
   var bs = Math.max(48, Math.round(44 * S));
   var rx = W - SAFE.right - 16 - (state === 'playing' ? bs * 2 + 22 : bs + 12);
@@ -965,7 +1162,7 @@ function drawHUD() {
   ctx.fillStyle = 'rgba(255,120,150,0.9)';
   ctx.fillText((ghosts ? ghosts.length : 0) + ' GHOST' + (ghosts && ghosts.length === 1 ? '' : 'S'), rx, ty + 18);
   if (state === 'playing') {
-    var remaining = CFG.loopDuration - loopTimer;
+    var remaining = loopDur - loopTimer;
     ctx.font = fontPx(12);
     ctx.fillStyle = remaining < 3 ? 'rgba(255,80,120,' + (0.6 + 0.4 * Math.sin(elapsed * 10)) + ')' : 'rgba(255,255,255,0.45)';
     ctx.fillText('NEXT IN ' + remaining.toFixed(1) + 's', rx, ty + 38);
@@ -1015,7 +1212,7 @@ function drawMenu() {
   ctx.textAlign = 'center';
   var cx = W / 2, cy = H / 2;
   var a = elapsed * 1.2;
-  var gx2 = cx + Math.cos(a) * Math.min(150, W * 0.3), gy2 = cy - 120 * S + Math.sin(a) * 30;
+  var gx2 = cx + Math.cos(a) * Math.min(150, W * 0.3), gy2 = cy - 150 * S + Math.sin(a) * 26;
   ctx.save();
   ctx.shadowBlur = 20; ctx.shadowColor = 'rgba(255,90,130,0.9)';
   ctx.fillStyle = 'rgba(255,90,130,0.6)';
@@ -1023,47 +1220,133 @@ function drawMenu() {
   ctx.restore();
   ctx.save();
   ctx.shadowBlur = 30; ctx.shadowColor = 'rgba(80,230,255,0.8)';
-  ctx.font = bfontPx(42);
+  ctx.font = bfontPx(40);
   ctx.fillStyle = '#50e6ff';
-  ctx.fillText('GHOST LOOP', cx, cy - 108 * S);
+  ctx.fillText('GHOST LOOP', cx, cy - 140 * S);
   ctx.restore();
-  ctx.font = fontPx(14);
-  ctx.fillStyle = 'rgba(255,255,255,0.75)';
-  ctx.fillText('Every 8 seconds, your past self returns to hunt you.', cx, cy - 74 * S);
-  ctx.font = fontPx(12);
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.fillText('WASD / drag to move · orbs = points · graze = bonus', cx, cy - 48 * S);
-  ctx.fillText('hexagon freezes ghosts · diamond phases through', cx, cy - 30 * S);
-
+  ctx.font = fontPx(13);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillText('Every loop, your past self returns to hunt you.', cx, cy - 110 * S);
   var bw = Math.min(W * 0.78, 320), bh = Math.max(48, 46 * S);
-  var mBtn = { x: cx - bw / 2, y: cy - 4 * S, w: bw, h: bh, label: 'MUSIC: ' + MUSIC[musicIndex].name, fn: cycleMusic };
-  buttons.push(mBtn);
-  drawTextButton(mBtn, false, 'tap to change track');
-
+  var yy = cy - 84 * S;
+  var cBtn = { x: cx - bw / 2, y: yy, w: bw, h: bh, label: 'CLASSIC — ENDLESS', fn: function () { startGame('classic', 0); } };
+  buttons.push(cBtn); drawTextButton(cBtn, true);
+  yy += bh + 10;
+  var lBtn = { x: cx - bw / 2, y: yy, w: bw, h: bh, label: 'LEVELS  ' + Math.min(levelMax, LVLS.length) + '/' + LVLS.length, fn: goLevels };
+  buttons.push(lBtn); drawTextButton(lBtn, false);
+  yy += bh + 10;
+  var mBtn = { x: cx - bw / 2, y: yy, w: bw, h: bh, label: 'MUSIC: ' + MUSIC[musicIndex].name, fn: cycleMusic };
+  buttons.push(mBtn); drawTextButton(mBtn, false);
+  yy += bh + 10;
   var sv = SKINS[skinView];
   var locked = best < sv.unlock;
-  var sub = locked ? 'LOCKED · REACH ' + sv.unlock.toLocaleString() + ' TO UNLOCK' : (skinView === skinIndex ? 'equipped · tap to browse' : 'tap to browse');
-  var bBtn = { x: cx - bw / 2, y: cy - 4 * S + bh + 12, w: bw, h: bh, label: 'BALL: ' + sv.name + (locked ? ' 🔒' : ''), fn: cycleSkin };
-  buttons.push(bBtn);
-  drawTextButton(bBtn, !locked && skinView === skinIndex, sub);
-
-  var ballY = cy - 4 * S + bh * 2 + 12 + 34;
+  var sub = locked ? 'LOCKED · REACH ' + sv.unlock.toLocaleString() + ' TO UNLOCK' : (skinView === skinIndex ? 'equipped' : 'tap to browse');
+  var bBtn = { x: cx - bw / 2, y: yy, w: bw, h: bh, label: 'BALL: ' + sv.name, fn: cycleSkin };
+  buttons.push(bBtn); drawTextButton(bBtn, false, sub);
+  yy += bh + 12;
+  ctx.textAlign = 'left';
+  ctx.font = bfontPx(11);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillText('HANDLING', cx - bw / 2, yy + 4);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(80,230,255,0.8)';
+  ctx.fillText(Math.round(controlF * 100) + '%', cx + bw / 2 - 74, yy + 4);
+  ctx.textAlign = 'center';
+  var trW = bw - 74;
+  var trY = yy + 18;
+  sliderRect = { x: cx - bw / 2, y: trY - 2, w: trW, h: 8 };
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  rrect(sliderRect.x, trY - 2, trW, 5, 2.5);
+  ctx.fill();
+  var kx = sliderRect.x + (controlF - 0.6) / 1.0 * trW;
+  ctx.save();
+  ctx.shadowBlur = 10; ctx.shadowColor = 'rgba(80,230,255,0.8)';
+  ctx.fillStyle = 'rgba(80,230,255,0.5)';
+  rrect(sliderRect.x, trY - 2, Math.max(4, kx - sliderRect.x), 5, 2.5);
+  ctx.fill();
+  ctx.fillStyle = '#50e6ff';
+  ctx.beginPath(); ctx.arc(kx, trY + 0.5, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  var rBtn = { x: cx + bw / 2 - 62, y: trY - 14, w: 62, h: 32, fn: function () { controlF = 1.0; try { localStorage.setItem('ghostloop_control', '1'); } catch (e2) {} sfx.uiTick(); } };
+  buttons.push(rBtn);
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1.5;
+  rrect(rBtn.x, rBtn.y, rBtn.w, rBtn.h, 8);
+  ctx.fill(); ctx.stroke();
+  ctx.font = bfontPx(10);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('RESET', rBtn.x + rBtn.w / 2, rBtn.y + rBtn.h / 2 + 1);
+  ctx.restore();
+  ctx.textBaseline = 'alphabetic';
+  yy += 46;
   var savedSkin = skinIndex;
   if (!locked) skinIndex = skinView;
-  drawPlayerBall(cx, ballY, 13, locked ? 0.25 : 1);
+  drawPlayerBall(cx, yy, 13, locked ? 0.25 : 1);
   skinIndex = savedSkin;
   if (locked) {
     ctx.font = bfontPx(14);
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillText('?', cx, ballY + 5);
+    ctx.fillText('?', cx, yy + 5);
   }
-
-  ctx.font = bfontPx(18);
-  ctx.fillStyle = 'rgba(255,255,255,' + (0.5 + 0.5 * Math.sin(elapsed * 4)) + ')';
-  ctx.fillText('TAP OR PRESS SPACE TO START', cx, ballY + 56 * S);
+  yy += 34 * S;
   ctx.font = bfontPx(14);
   ctx.fillStyle = 'rgba(255,215,80,0.85)';
-  ctx.fillText('HIGH SCORE ' + best.toLocaleString() + '  ·  ' + bestLoops + ' LOOPS SURVIVED', cx, ballY + 84 * S);
+  ctx.fillText('HIGH SCORE ' + best.toLocaleString() + '  ·  ' + bestLoops + ' LOOPS SURVIVED', cx, yy);
+}
+function drawLevels() {
+  ctx.textAlign = 'center';
+  var cx = W / 2;
+  ctx.save();
+  ctx.shadowBlur = 24; ctx.shadowColor = 'rgba(140,255,180,0.7)';
+  ctx.font = bfontPx(30);
+  ctx.fillStyle = 'rgba(140,255,180,0.95)';
+  ctx.fillText('LEVELS', cx, SAFE.top + 60 * S);
+  ctx.restore();
+  ctx.font = fontPx(12);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('survive the loops, collect the orbs', cx, SAFE.top + 84 * S);
+  var cols = 4, rows = 3;
+  var cell = Math.min((W - 80) / cols, 92 * S);
+  var gw = cell * cols + 14 * (cols - 1);
+  var gx0 = cx - gw / 2;
+  var gy0 = SAFE.top + 112 * S;
+  for (var i = 0; i < LVLS.length; i++) {
+    var r = Math.floor(i / cols), c = i % cols;
+    var x = gx0 + c * (cell + 14), y = gy0 + r * (cell + 14);
+    var unlocked = i < levelMax;
+    var b = { x: x, y: y, w: cell, h: cell, idx: i };
+    ctx.save();
+    ctx.fillStyle = unlocked ? 'rgba(140,255,180,0.1)' : 'rgba(255,255,255,0.04)';
+    ctx.strokeStyle = unlocked ? 'rgba(140,255,180,0.7)' : 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 2;
+    rrect(x, y, cell, cell, 14);
+    ctx.fill(); ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = bfontPx(22);
+    ctx.fillStyle = unlocked ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.25)';
+    ctx.fillText(String(i + 1), x + cell / 2, y + cell / 2 + 2);
+    var lv = LVLS[i];
+    var tags = [];
+    if (lv.mirror) tags.push('MIRROR');
+    if (lv.fog) tags.push('FOG');
+    if (lv.small) tags.push('SMALL');
+    if (lv.fast) tags.push('FAST');
+    if (lv.loopDur) tags.push('6s');
+    ctx.font = fontPx(9);
+    ctx.fillStyle = unlocked ? 'rgba(140,255,180,0.7)' : 'rgba(255,255,255,0.18)';
+    ctx.fillText(unlocked ? (tags.join(' ') || 'INTRO') : 'LOCKED', x + cell / 2, y + cell - 10);
+    ctx.restore();
+    if (unlocked) {
+      (function (idx) {
+        b.fn = function () { startGame('level', idx); };
+      })(i);
+      buttons.push(b);
+    }
+  }
 }
 function drawPaused() {
   ctx.fillStyle = 'rgba(7,7,14,0.7)';
@@ -1071,65 +1354,80 @@ function drawPaused() {
   ctx.textAlign = 'center';
   ctx.font = bfontPx(36);
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.fillText('PAUSED', W / 2, H / 2 - 40);
+  ctx.fillText('PAUSED', W / 2, H / 2 - 60);
   ctx.font = fontPx(14);
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.fillText('tap anywhere or press P to resume', W / 2, H / 2 - 8);
+  ctx.fillText('tap anywhere or press P to resume', W / 2, H / 2 - 28);
   var bw = Math.min(W * 0.7, 300), bh = 50;
-  var mBtn = { x: W / 2 - bw / 2, y: H / 2 + 20, w: bw, h: bh, label: 'MUSIC: ' + MUSIC[musicIndex].name, fn: cycleMusic };
-  buttons.push(mBtn);
-  drawTextButton(mBtn, false);
+  var mBtn = { x: W / 2 - bw / 2, y: H / 2, w: bw, h: bh, label: 'MUSIC: ' + MUSIC[musicIndex].name, fn: cycleMusic };
+  buttons.push(mBtn); drawTextButton(mBtn, false);
+  var qBtn = { x: W / 2 - bw / 2, y: H / 2 + bh + 12, w: bw, h: bh, label: 'QUIT TO MENU', fn: function () { paused = false; goMenu(); } };
+  buttons.push(qBtn); drawTextButton(qBtn, false);
 }
 function drawGameOver() {
   ctx.fillStyle = 'rgba(7,7,14,0.75)';
   ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center';
   var cx = W / 2, cy = H / 2;
+  var isClear = levelResult === 'clear';
   ctx.save();
-  ctx.shadowBlur = 25; ctx.shadowColor = 'rgba(255,80,120,0.8)';
-  ctx.font = bfontPx(32);
-  ctx.fillStyle = 'rgba(255,90,130,0.95)';
-  ctx.fillText('CAUGHT BY YOURSELF', cx, cy - 118 * S);
+  ctx.shadowBlur = 25;
+  ctx.shadowColor = isClear ? 'rgba(140,255,180,0.8)' : 'rgba(255,80,120,0.8)';
+  ctx.font = bfontPx(isClear ? 36 : 32);
+  ctx.fillStyle = isClear ? 'rgba(140,255,180,0.95)' : 'rgba(255,90,130,0.95)';
+  ctx.fillText(isClear ? 'LEVEL ' + (levelIndex + 1) + ' CLEAR' : 'CAUGHT BY YOURSELF', cx, cy - 118 * S);
   ctx.restore();
   ctx.font = fontPx(13);
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.fillText('Ghost #' + deathInfo.byLoop + ' got you', cx, cy - 90 * S);
+  if (isClear) ctx.fillText(levelIndex + 1 >= LVLS.length ? 'ALL LEVELS CLEARED. YOU BEAT YOURSELF.' : 'your past never stood a chance', cx, cy - 90 * S);
+  else if (mode === 'level') ctx.fillText('Ghost #' + deathInfo.byLoop + (deathInfo.mirror ? ' (MIRROR)' : '') + ' got you', cx, cy - 90 * S);
+  else ctx.fillText('Ghost #' + deathInfo.byLoop + ' got you', cx, cy - 90 * S);
   ctx.font = bfontPx(32);
   ctx.fillStyle = '#fff';
   ctx.fillText(Math.floor(score).toLocaleString(), cx, cy - 46 * S);
   ctx.font = fontPx(11);
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.fillText('SCORE · BEST ' + best.toLocaleString(), cx, cy - 28 * S);
+  ctx.fillText(mode === 'classic' ? 'SCORE · BEST ' + best.toLocaleString() : 'SCORE', cx, cy - 28 * S);
   var infoY = cy - 4 * S;
-  if (newUnlock) {
-    ctx.font = bfontPx(17);
-    ctx.fillStyle = 'rgba(140,255,180,' + (0.6 + 0.4 * Math.sin(elapsed * 6)) + ')';
-    ctx.fillText('NEW BALL UNLOCKED: ' + newUnlock, cx, infoY);
-    infoY += 26;
-  } else if (newBest) {
-    ctx.font = bfontPx(16);
-    ctx.fillStyle = 'rgba(255,215,80,' + (0.6 + 0.4 * Math.sin(elapsed * 6)) + ')';
-    ctx.fillText('NEW BEST', cx, infoY);
-    infoY += 24;
+  if (mode === 'classic') {
+    if (newUnlock) {
+      ctx.font = bfontPx(17);
+      ctx.fillStyle = 'rgba(140,255,180,' + (0.6 + 0.4 * Math.sin(elapsed * 6)) + ')';
+      ctx.fillText('NEW BALL UNLOCKED: ' + newUnlock, cx, infoY);
+      infoY += 26;
+    } else if (newBest) {
+      ctx.font = bfontPx(16);
+      ctx.fillStyle = 'rgba(255,215,80,' + (0.6 + 0.4 * Math.sin(elapsed * 6)) + ')';
+      ctx.fillText('NEW BEST', cx, infoY);
+      infoY += 24;
+    }
   }
   ctx.font = fontPx(13);
   ctx.fillStyle = 'rgba(255,255,255,0.55)';
   ctx.fillText(loopCount + ' loops · ' + orbsCollected + ' orbs · ' + grazes + ' grazes · ' + survivalTime.toFixed(1) + 's', cx, infoY);
   infoY += 22;
-  var next = null;
-  for (var i = 0; i < SKINS.length; i++) { if (best < SKINS[i].unlock) { next = SKINS[i]; break; } }
-  if (next) {
-    ctx.font = fontPx(12);
-    ctx.fillStyle = 'rgba(140,220,255,0.6)';
-    ctx.fillText('next ball "' + next.name + '" at ' + next.unlock.toLocaleString(), cx, infoY);
+  if (mode === 'classic') {
+    var next = null;
+    for (var i = 0; i < SKINS.length; i++) { if (best < SKINS[i].unlock) { next = SKINS[i]; break; } }
+    if (next) {
+      ctx.font = fontPx(12);
+      ctx.fillStyle = 'rgba(140,220,255,0.6)';
+      ctx.fillText('next ball "' + next.name + '" at ' + next.unlock.toLocaleString(), cx, infoY);
+    }
   }
   if (elapsed - deadAt > 0.5) {
     var bw = Math.min(W * 0.72, 300), bh = 52;
-    var b1 = { x: cx - bw / 2, y: cy + 52 * S, w: bw, h: bh, label: 'LOOP AGAIN', fn: startGame };
-    var b2 = { x: cx - bw / 2, y: cy + 52 * S + bh + 14, w: bw, h: bh, label: 'SHARE SCORE', fn: shareScore };
-    buttons.push(b1); buttons.push(b2);
+    var label1 = 'LOOP AGAIN';
+    if (mode === 'level') label1 = isClear ? (levelIndex + 1 < LVLS.length ? 'NEXT LEVEL' : 'REPLAY FINALE') : 'RETRY LEVEL';
+    var b1 = { x: cx - bw / 2, y: cy + 52 * S, w: bw, h: bh, label: label1, fn: retryCurrent };
+    var b2;
+    if (mode === 'level') b2 = { x: cx - bw / 2, y: cy + 52 * S + bh + 14, w: bw, h: bh, label: 'LEVEL SELECT', fn: goLevels };
+    else b2 = { x: cx - bw / 2, y: cy + 52 * S + bh + 14, w: bw, h: bh, label: 'SHARE SCORE', fn: shareScore };
+    var b3 = { x: cx - bw / 2, y: cy + 52 * S + (bh + 14) * 2, w: bw, h: bh, label: 'MENU', fn: goMenu };
+    buttons.push(b1); buttons.push(b2); buttons.push(b3);
     drawTextButton(b1, true);
     drawTextButton(b2, false);
+    drawTextButton(b3, false);
   }
 }
 function frame(ts) {
