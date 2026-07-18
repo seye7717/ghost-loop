@@ -626,13 +626,13 @@ function update(dt) {
   if (touch.active) {
     var tdx = touch.x - touch.ox, tdy = touch.y - touch.oy;
     var td = Math.hypot(tdx, tdy);
-    var dz = Math.max(3, 10 - controlF * 4);
-    var reach = Math.max(36, 64 - controlF * 14);
+    var dz = Math.max(2, 12 - controlF * 6);
+    var reach = Math.max(30, 72 - controlF * 22);
     if (td > dz) { ix = tdx / td * Math.min(td / reach, 1); iy = tdy / td * Math.min(td / reach, 1); }
   }
   var il = Math.hypot(ix, iy);
   if (il > 1) { ix /= il; iy /= il; }
-  var cf2 = Math.pow(controlF, 1.5);
+  var cf2 = Math.pow(controlF, 2.2);
   player.vx += ix * CFG.playerAccel * cf2 * dt;
   player.vy += iy * CFG.playerAccel * cf2 * dt;
   player.vx -= player.vx * CFG.friction * cf2 * dt;
