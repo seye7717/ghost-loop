@@ -38,7 +38,7 @@
 var canvas = document.getElementById('game');
 var ctx = canvas.getContext('2d');
 
-var CFG = { loopDuration: 8, playerRadius: 11, playerSpeed: 370, playerAccel: 2400, friction: 8, orbRadius: 8, orbCount: 3, ghostGrace: 1.4, collideDist: 17, comboWindow: 3.0, maxCombo: 5, nearDanger: 70, grazeDist: 42, grazeCooldown: 0.6, powerupR: 13, powerupLife: 9, powerupMinGap: 16, freezeDur: 3, phaseDur: 3, slowDur: 3, bountyDur: 8, blastRewind: 1.5, milestoneEvery: 5, milestoneBonus: 250, ghostCap: 7 };
+var CFG = { loopDuration: 8, playerRadius: 11, playerSpeed: 370, playerAccel: 2400, friction: 8, orbRadius: 8, orbCount: 3, ghostGrace: 1.4, collideDist: 17, comboWindow: 3.0, maxCombo: 5, nearDanger: 70, grazeDist: 42, grazeCooldown: 0.6, powerupR: 13, powerupLife: 9, powerupMinGap: 16, freezeDur: 3, phaseDur: 4, slowDur: 3, bountyDur: 8, blastRewind: 1.5, milestoneEvery: 5, milestoneBonus: 250, ghostCap: 7 };
 
 var SKINS = [
   { name: 'NOVA', unlock: 0, fx: 'nova' },
@@ -754,10 +754,18 @@ function applyPowerup(pu) {
   } else if (pu.type === 'blast') {
     sfx.blast();
     shake = Math.min(shake + 8, 14);
-    for (var i = 0; i < ghosts.length; i++) {
-      ghosts[i].born = Math.min(ghosts[i].born + CFG.blastRewind, ghostClock);
+    if (ghosts.length > 0) {
+      var ni = 0, nd = 1e9;
+      for (var i = 0; i < ghosts.length; i++) {
+        var d2 = Math.hypot(player.x - ghosts[i].x, player.y - ghosts[i].y);
+        if (d2 < nd) { nd = d2; ni = i; }
+      }
+      var gone = ghosts.splice(ni, 1)[0];
+      burst(gone.x, gone.y, [255, 150, 60], 26, 240);
+      floatText(gone.x, gone.y - 20, 'GHOST ERASED', 'rgba(255,150,60,1)', true);
     }
-    floatText(pu.x, pu.y - 20, 'BLAST', 'rgba(255,150,60,1)', true);
+    loopCount = Math.max(0, loopCount - 1);
+    floatText(pu.x, pu.y - 20, 'BLAST  -1 LOOP', 'rgba(255,150,60,1)', true);
     burst(pu.x, pu.y, [255, 150, 60], 22, 220);
   } else if (pu.type === 'slow') {
     slowUntil = elapsed + CFG.slowDur;
