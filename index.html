@@ -110,6 +110,7 @@ var muted = false;
 var lastHeartbeat = 0, lastFlame = 0;
 var buttons = [];
 var skinIndex = 0, skinView = 0, musicIndex = 0;
+var lowFX = false, emaFt = 0.016;
 var controlF = 1.0;
 var sliderRect = null, sliderDrag = false;
 var seenTut = false, tutT = -1;
@@ -391,7 +392,7 @@ function setArena() {
   }
 }
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  DPR = Math.min(window.devicePixelRatio || 1, lowFX ? 1.25 : 2);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = W * DPR; canvas.height = H * DPR;
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
@@ -408,6 +409,11 @@ function resize() {
 }
 addEventListener('resize', resize);
 resize();
+setTimeout(resize, 150);
+setTimeout(resize, 600);
+setTimeout(resize, 1500);
+addEventListener('orientationchange', function () { setTimeout(resize, 300); });
+if (window.visualViewport) window.visualViewport.addEventListener('resize', function () { resize(); });
 function fontPx(n) { return Math.round(n * S) + 'px Courier New'; }
 function bfontPx(n) { return 'bold ' + Math.round(n * S) + 'px Courier New'; }
 
@@ -492,7 +498,7 @@ function spawnPowerup() {
   powerups.push({ x: p.x, y: p.y, type: type, born: elapsed, rot: 0 });
 }
 function burst(x, y, color, n, speed) {
-  var cap = 220;
+  var cap = lowFX ? 100 : 220;
   for (var i = 0; i < n && particles.length < cap; i++) {
     var a = Math.random() * Math.PI * 2;
     var s = (0.3 + Math.random() * 0.7) * speed;
@@ -991,7 +997,7 @@ function draw() {
   bgGrad.addColorStop(1, '#07070e');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
-  for (var si = 0; si < stars.length; si++) {
+  for (var si = 0; lowFX === false && si < stars.length; si++) {
     var st = stars[si];
     var tw = 0.25 + 0.75 * (0.5 + 0.5 * Math.sin(elapsed * st.sp + st.ph));
     ctx.fillStyle = 'rgba(160,170,255,' + (0.1 * tw) + ')';
@@ -1061,7 +1067,7 @@ function draw() {
     ctx.strokeStyle = col2 + '0.06)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    for (var pj = 0; pj < g.path.length; pj += 4) {
+    for (var pj = 0; lowFX === false && pj < g.path.length; pj += 4) {
       var pp = g.path[pj];
       if (pj === 0) ctx.moveTo(pp.x, pp.y); else ctx.lineTo(pp.x, pp.y);
     }
@@ -1525,8 +1531,15 @@ function drawGameOver() {
   }
 }
 function frame(ts) {
-  var dt = Math.min((ts - lastTime) / 1000 || 0.016, 0.05);
+  var raw = (ts - lastTime) / 1000 || 0.016;
   lastTime = ts;
+  var dt = Math.min(raw, 0.1);
+  emaFt = emaFt * 0.95 + Math.min(raw, 0.25) * 0.05;
+  if (!lowFX && elapsed > 5 && emaFt > 0.045) {
+    lowFX = true;
+    resize();
+  }
+  if (window.innerWidth !== W || window.innerHeight !== H) resize();
   update(dt);
   draw();
   requestAnimationFrame(frame);
