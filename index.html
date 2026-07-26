@@ -38,6 +38,7 @@
 var canvas = document.getElementById('game');
 var ctx = canvas.getContext('2d');
 
+var GLVERSION = 'v5.1';
 var CFG = { loopDuration: 8, playerRadius: 11, playerSpeed: 370, playerAccel: 2400, friction: 8, orbRadius: 8, orbCount: 3, ghostGrace: 1.4, collideDist: 17, comboWindow: 3.0, maxCombo: 5, nearDanger: 70, grazeDist: 42, grazeCooldown: 0.6, powerupR: 13, powerupLife: 9, powerupMinGap: 16, freezeDur: 3, phaseDur: 4, slowDur: 3, bountyDur: 8, blastRewind: 1.5, milestoneEvery: 5, milestoneBonus: 250, ghostCap: 7 };
 
 var SKINS = [
@@ -376,10 +377,10 @@ function readSafeArea() {
   try {
     var p1 = document.getElementById('safeprobe').getBoundingClientRect();
     var p2 = document.getElementById('safeprobe2').getBoundingClientRect();
-    SAFE.top = Math.max(0, p1.top);
-    SAFE.left = Math.max(0, p1.left);
-    SAFE.bottom = Math.max(0, H - p2.bottom - 10 >= 0 ? H - (p2.top + 10) : 0);
-    SAFE.right = Math.max(0, W - (p2.left + 10));
+    SAFE.top = Math.min(64, Math.max(0, p1.top));
+    SAFE.left = Math.min(50, Math.max(0, p1.left));
+    SAFE.bottom = Math.min(44, Math.max(0, H - p2.bottom - 10 >= 0 ? H - (p2.top + 10) : 0));
+    SAFE.right = Math.min(50, Math.max(0, W - (p2.left + 10)));
   } catch (e) { SAFE = { top: 0, left: 0, right: 0, bottom: 0 }; }
 }
 function setArena() {
@@ -632,7 +633,15 @@ function update(dt) {
   if (touch.active) {
     var tdx = touch.x - touch.ox, tdy = touch.y - touch.oy;
     var td = Math.hypot(tdx, tdy);
-    var reach = Math.max(30, 72 - controlF * 22);
+    var reach = Math.max(24, 56 - controlF * 16);
+    if (td > reach) {
+      var excess = td - reach;
+      touch.ox += tdx / td * excess;
+      touch.oy += tdy / td * excess;
+      tdx = touch.x - touch.ox;
+      tdy = touch.y - touch.oy;
+      td = reach;
+    }
     if (td > 6) { ix = tdx / td * Math.min(td / reach, 1); iy = tdy / td * Math.min(td / reach, 1); }
   }
   var il = Math.hypot(ix, iy);
@@ -1388,6 +1397,9 @@ function drawMenu() {
   ctx.font = bfontPx(14);
   ctx.fillStyle = 'rgba(255,215,80,0.85)';
   ctx.fillText('HIGH SCORE ' + best.toLocaleString() + '  ·  ' + bestLoops + ' LOOPS SURVIVED', cx, yy);
+  ctx.font = fontPx(11);
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillText(GLVERSION, cx, H - SAFE.bottom - 14);
 }
 function drawLevels() {
   ctx.textAlign = 'center';
