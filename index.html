@@ -38,7 +38,7 @@
 var canvas = document.getElementById('game');
 var ctx = canvas.getContext('2d');
 
-var GLVERSION = 'v5.4';
+var GLVERSION = 'v5.5';
 var CFG = { loopDuration: 8, playerRadius: 11, playerSpeed: 340, playerAccel: 2400, friction: 8, orbRadius: 8, orbCount: 3, ghostGrace: 1.4, collideDist: 17, comboWindow: 3.0, maxCombo: 5, nearDanger: 70, grazeDist: 42, grazeCooldown: 0.6, powerupR: 13, powerupLife: 9, powerupMinGap: 16, freezeDur: 3, phaseDur: 4, slowDur: 3, bountyDur: 8, blastRewind: 1.5, milestoneEvery: 5, milestoneBonus: 250, ghostCap: 7 };
 
 var SKINS = [
@@ -111,7 +111,8 @@ var muted = false;
 var lastHeartbeat = 0, lastFlame = 0;
 var buttons = [];
 var skinIndex = 0, skinView = 0, musicIndex = 0;
-var lowFX = false, emaFt = 0.016;
+var lowFX = false, emaFt = 0.016, accum = 0;
+var FIXED_DT = 1 / 60;
 var controlF = 1.0;
 var sliderRect = null, sliderDrag = false;
 var seenTut = false, tutT = -1;
@@ -1540,15 +1541,22 @@ function drawGameOver() {
 function frame(ts) {
   var raw = (ts - lastTime) / 1000 || 0.016;
   lastTime = ts;
-  var dt = Math.min(raw, 0.1);
-  emaFt = emaFt * 0.95 + Math.min(raw, 0.25) * 0.05;
-  if (!lowFX && elapsed > 5 && emaFt > 0.045) {
+  raw = Math.min(raw, 0.25);
+  emaFt = emaFt * 0.95 + raw * 0.05;
+  if (!lowFX && elapsed > 5 && emaFt > 0.05) {
     lowFX = true;
     resize();
   }
   if (window.visualViewport && (window.visualViewport.offsetTop > 1 || window.visualViewport.offsetLeft > 1)) { try { window.scrollTo(0, 0); } catch (e2) {} }
   if (window.innerWidth !== W || window.innerHeight !== H) resize();
-  update(dt);
+  accum += raw;
+  var steps = 0;
+  while (accum >= FIXED_DT && steps < 8) {
+    update(FIXED_DT);
+    accum -= FIXED_DT;
+    steps++;
+  }
+  if (steps >= 8) accum = 0;
   draw();
   requestAnimationFrame(frame);
 }
