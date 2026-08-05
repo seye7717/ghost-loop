@@ -16,6 +16,15 @@ workflows:
           mkdir -p ios/GhostLoop/game
           cp index.html ios/GhostLoop/game/index.html
           sips -z 1024 1024 icon.png --out ios/GhostLoop/Assets.xcassets/AppIcon.appiconset/icon.png
+      - name: Debug project readability
+        script: |
+          xcodebuild -version
+          echo "=== plutil lint ==="
+          plutil -lint ios/GhostLoop.xcodeproj/project.pbxproj || true
+          echo "=== xcodebuild -list ==="
+          xcodebuild -project ios/GhostLoop.xcodeproj -list 2>&1 | head -40 || true
+          echo "=== showBuildSettings ==="
+          xcodebuild -project ios/GhostLoop.xcodeproj -scheme GhostLoop -showBuildSettings 2>&1 | head -60 || true
       - name: Set up signing
         script: xcode-project use-profiles
       - name: Build ipa
