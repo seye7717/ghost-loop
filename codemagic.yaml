@@ -1,0 +1,27 @@
+workflows:
+  ios-release:
+    name: Ghost Loop iOS Release
+    max_build_duration: 45
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: GhostLoopKey
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.seye.ghostloop
+      xcode: latest
+    scripts:
+      - name: Prepare game and icon
+        script: |
+          mkdir -p ios/GhostLoop/game
+          cp index.html ios/GhostLoop/game/index.html
+          sips -z 1024 1024 icon.png --out ios/GhostLoop/Assets.xcassets/AppIcon.appiconset/icon.png
+      - name: Set up signing
+        script: xcode-project use-profiles
+      - name: Build ipa
+        script: xcode-project build-ipa --project "ios/GhostLoop.xcodeproj" --scheme "GhostLoop"
+    artifacts:
+      - build/ios/ipa/*.ipa
+    publishing:
+      app_store_connect:
+        auth: integration
